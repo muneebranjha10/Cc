@@ -1,0 +1,51 @@
+name: Build ColorCC Glass Edition
+on:
+  workflow_dispatch:
+    inputs:
+      base_apk_url:
+        description: Optional HTTPS URL for original ColorCC APK
+        required: false
+        type: string
+  push:
+    paths:
+      - 'input/ColorCC.apk'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android signing tools
+        run: sdkmanager 'build-tools;35.0.0'
+      - name: Resolve source APK
+        env:
+          BASE_APK_URL: ${{ inputs.base_apk_url }}
+        run: |
+          mkdir -p input
+          if [ ! -s input/ColorCC.apk ] && [ -n "$BASE_APK_URL" ]; then
+            case "$BASE_APK_URL" in https://*) ;; *) echo 'Only HTTPS links supported'; exit 1 ;; esac
+            curl --fail --location --retry 2 --output input/ColorCC.apk "$BASE_APK_URL"
+          fi
+          test -s input/ColorCC.apk || (echo 'Upload the original APK to input/ColorCC.apk or provide base_apk_url' && exit 1)
+          unzip -t input/ColorCC.apk >/dev/null
+      - name: Apply ControlCenter-style lens improvements to ColorCC
+        run: |
+          mkdir -p build dist
+          python3 scripts/patch.py --input input/ColorCC.apk --output build/ColorCC-GlassEdition-unsigned.apk
+      - name: Sign experimental APK
+        run: |
+          keytool -genkeypair -keystore build/ci-debug.jks -storepass android -keypass android -alias cc-glass-ci -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=CC Glass Experimental' -noprompt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks build/ci-debug.jks --ks-key-alias cc-glass-ci --ks-pass pass:android --key-pass pass:android --out dist/ColorCC-GlassEdition.apk build/ColorCC-GlassEdition-unsigned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/ColorCC-GlassEdition.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ColorCC-GlassEdition-Experimental
+          path: dist/ColorCC-GlassEdition.apk
+          retention-days: 14
