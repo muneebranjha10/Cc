@@ -1,0 +1,41 @@
+name: Build Combine CC geometry test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate user-provided APK
+        run: |
+          test -s input/Combine-CC-Geometry-Experimental.apk || (echo 'Missing source. Keep original APK in a PRIVATE repository: input/Combine-CC-Geometry-Experimental.apk' && exit 1)
+          echo 'd731fb16db3fee293148731fee962a49432c484dfc5490fea9c8ac94bcd8694c  input/Combine-CC-Geometry-Experimental.apk' | sha256sum -c -
+          unzip -t input/Combine-CC-Geometry-Experimental.apk
+      - name: Apply bounded geometry patch
+        run: |
+          mkdir -p build dist
+          python3 geometry-fix/patch.py --input input/Combine-CC-Geometry-Experimental.apk --output build/CombineCC-GeometryTest-unsigned.apk --report build/patch-report.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install official APK tools
+        run: sdkmanager 'build-tools;36.0.0'
+      - name: Align, sign and verify
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -p -f 4 build/CombineCC-GeometryTest-unsigned.apk build/aligned.apk
+          keytool -genkeypair -noprompt -keystore build/test-only.jks -alias test -storepass android -keypass android -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=Combine CC Geometry Test'
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks build/test-only.jks --ks-key-alias test --ks-pass pass:android --key-pass pass:android --out dist/CombineCC-GeometryTest-CANDIDATE.apk build/aligned.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs dist/CombineCC-GeometryTest-CANDIDATE.apk
+          unzip -t dist/CombineCC-GeometryTest-CANDIDATE.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CombineCC-GeometryTest-UNTESTED
+          path: |
+            dist/CombineCC-GeometryTest-CANDIDATE.apk
+            build/patch-report.json
+          retention-days: 14
