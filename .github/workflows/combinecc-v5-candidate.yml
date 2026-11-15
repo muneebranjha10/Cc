@@ -1,0 +1,53 @@
+name: Build Combine CC v5 candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install official Android SDK tools
+        run: sdkmanager 'build-tools;36.0.0'
+      - name: Verify input and patch
+        run: |
+          test -s input/Combine-CC-Geometry-Experimental.apk || (echo 'Original APK missing. Use PRIVATE repo with input/Combine-CC-Geometry-Experimental.apk' && exit 1)
+          echo 'd731fb16db3fee293148731fee962a49432c484dfc5490fea9c8ac94bcd8694c  input/Combine-CC-Geometry-Experimental.apk' | sha256sum -c -
+          mkdir -p dist
+          python3 v5/patch.py --input input/Combine-CC-Geometry-Experimental.apk --output dist/candidate-unsigned.apk --report dist/patch-report.json
+      - name: Align, sign and verify APK
+        env:
+          CC_KEYSTORE_BASE64: ${{ secrets.CC_KEYSTORE_BASE64 }}
+          CC_KEYSTORE_PASS: ${{ secrets.CC_KEYSTORE_PASS }}
+          CC_KEY_ALIAS: ${{ secrets.CC_KEY_ALIAS }}
+          CC_KEY_PASS: ${{ secrets.CC_KEY_PASS }}
+        run: |
+          set -eu
+          TOOL="$ANDROID_HOME/build-tools/36.0.0"
+          "$TOOL/zipalign" -f -p 4 dist/candidate-unsigned.apk dist/candidate-aligned.apk
+          "$TOOL/zipalign" -c -p 4 dist/candidate-aligned.apk
+          if [ -n "$CC_KEYSTORE_BASE64" ]; then
+            test -n "$CC_KEY_ALIAS" && test -n "$CC_KEYSTORE_PASS" && test -n "$CC_KEY_PASS"
+            printf %s "$CC_KEYSTORE_BASE64" | base64 -d > dist/signing.jks
+            PASS="$CC_KEYSTORE_PASS"; KP="$CC_KEY_PASS"; ALIAS="$CC_KEY_ALIAS"
+          else
+            keytool -genkeypair -noprompt -keystore dist/signing.jks -storepass android -keypass android -alias test -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=Combine CC v5 Candidate'
+            PASS=android; KP=android; ALIAS=test
+          fi
+          "$TOOL/apksigner" sign --ks dist/signing.jks --ks-key-alias "$ALIAS" --ks-pass "pass:$PASS" --key-pass "pass:$KP" --out dist/CombineCC-v5-Android16-17-UNTESTED.apk dist/candidate-aligned.apk
+          "$TOOL/apksigner" verify --verbose --print-certs dist/CombineCC-v5-Android16-17-UNTESTED.apk
+          unzip -t dist/CombineCC-v5-Android16-17-UNTESTED.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CombineCC-v5-UNTESTED
+          path: |
+            dist/CombineCC-v5-Android16-17-UNTESTED.apk
+            dist/patch-report.json
+          retention-days: 30
