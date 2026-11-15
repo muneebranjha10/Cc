@@ -19,9 +19,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - name: Check preinstalled Android SDK
+        run: |
+          test -d "$ANDROID_HOME"
+          echo "Android SDK: $ANDROID_HOME"
+          "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --version
       - name: Install official APK signing tools
-        run: sdkmanager 'build-tools;36.0.0'
+        run: |
+          if [ ! -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]; then
+            "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" 'build-tools;36.0.0'
+          fi
       - name: Verify base v7 file and patch whole-panel animation
         run: |
           set -eu
