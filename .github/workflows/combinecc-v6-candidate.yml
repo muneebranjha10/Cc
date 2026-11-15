@@ -1,0 +1,52 @@
+name: Build Combine CC v6 experimental
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Android SDK build tools
+        run: sdkmanager 'build-tools;36.0.0'
+      - name: Verify exact Combine CC APK and patch
+        run: |
+          test -s input/Combine-CC-Geometry-Experimental.apk || (echo 'Base APK missing. Copy source and workflow into a PRIVATE repo and add input/Combine-CC-Geometry-Experimental.apk' && exit 1)
+          echo 'd731fb16db3fee293148731fee962a49432c484dfc5490fea9c8ac94bcd8694c  input/Combine-CC-Geometry-Experimental.apk' | sha256sum -c -
+          mkdir -p build dist
+          python3 v6/patch.py --input input/Combine-CC-Geometry-Experimental.apk --output build/unsigned.apk --report build/changes.json
+      - name: Align, sign, and verify
+        env:
+          KEYSTORE_B64: ${{ secrets.CC_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.CC_KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.CC_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.CC_KEY_PASS }}
+        run: |
+          set -eu
+          TOOL="$ANDROID_HOME/build-tools/36.0.0"
+          "$TOOL/zipalign" -p -f 4 build/unsigned.apk build/aligned.apk
+          "$TOOL/zipalign" -c -p 4 build/aligned.apk
+          if [ -z "$KEYSTORE_B64" ]; then
+            keytool -genkeypair -noprompt -keystore build/experimental.jks -alias test -keyalg RSA -keysize 3072 -validity 3650 -storepass android -keypass android -dname 'CN=Combine CC v6 Experiment'
+            STORE_PASS=android; KEY_PASS=android; KEY_ALIAS=test
+          else
+            test -n "$STORE_PASS" && test -n "$KEY_PASS" && test -n "$KEY_ALIAS"
+            printf %s "$KEYSTORE_B64" | base64 -d > build/experimental.jks
+          fi
+          "$TOOL/apksigner" sign --ks build/experimental.jks --ks-key-alias "$KEY_ALIAS" --ks-pass "pass:$STORE_PASS" --key-pass "pass:$KEY_PASS" --out dist/CombineCC-v6-UNTESTED.apk build/aligned.apk
+          "$TOOL/apksigner" verify --verbose --print-certs dist/CombineCC-v6-UNTESTED.apk
+          unzip -t dist/CombineCC-v6-UNTESTED.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CombineCC-v6-UNTESTED
+          path: |
+            dist/CombineCC-v6-UNTESTED.apk
+            build/changes.json
+          retention-days: 30
