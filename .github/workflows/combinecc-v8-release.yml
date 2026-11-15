@@ -1,0 +1,70 @@
+name: Build and publish Combine CC v8 candidate
+on:
+  push:
+    paths:
+      - 'v8/**'
+      - '.github/workflows/combinecc-v8-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install official APK signing tools
+        run: sdkmanager 'build-tools;36.0.0'
+      - name: Verify base v7 file and patch whole-panel animation
+        run: |
+          set -eu
+          echo 'fdad10b92770925cf9d1a0cf8c7f0b6b0e756ce250d21ceda387afd21583e898  releases/CombineCC-v7-UNTESTED.apk' | sha256sum -c -
+          mkdir -p build releases
+          python3 v8/patch.py --input releases/CombineCC-v7-UNTESTED.apk --output build/v8-unsigned.apk --report build/changes.json
+      - name: Align and sign test APK
+        env:
+          KEYSTORE_B64: ${{ secrets.CC_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.CC_KEY_ALIAS }}
+          STORE_PASS: ${{ secrets.CC_KEYSTORE_PASS }}
+          KEY_PASS: ${{ secrets.CC_KEY_PASS }}
+        run: |
+          set -eu
+          TOOL="$ANDROID_HOME/build-tools/36.0.0"
+          "$TOOL/zipalign" -f -p 4 build/v8-unsigned.apk build/v8-aligned.apk
+          "$TOOL/zipalign" -c -p 4 build/v8-aligned.apk
+          if [ -n "$KEYSTORE_B64" ]; then
+            test -n "$KEY_ALIAS" && test -n "$STORE_PASS" && test -n "$KEY_PASS"
+            printf %s "$KEYSTORE_B64" | base64 -d > build/signing.jks
+          else
+            keytool -genkeypair -noprompt -keystore build/signing.jks -alias test -storepass android -keypass android -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=Combine CC v8 Experimental'
+            KEY_ALIAS=test
+            STORE_PASS=android
+            KEY_PASS=android
+          fi
+          "$TOOL/apksigner" sign --ks build/signing.jks --ks-key-alias "$KEY_ALIAS" --ks-pass "pass:$STORE_PASS" --key-pass "pass:$KEY_PASS" --out releases/CombineCC-v8-UNTESTED.apk build/v8-aligned.apk
+          "$TOOL/apksigner" verify --verbose --print-certs releases/CombineCC-v8-UNTESTED.apk
+          unzip -t releases/CombineCC-v8-UNTESTED.apk
+          sha256sum releases/CombineCC-v8-UNTESTED.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CombineCC-v8-UNTESTED
+          path: |
+            releases/CombineCC-v8-UNTESTED.apk
+            build/changes.json
+          retention-days: 30
+      - name: Publish signed candidate to repository for browser download
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add releases/CombineCC-v8-UNTESTED.apk
+          if ! git diff --cached --quiet; then
+            git commit -m 'Publish signed Combine CC v8 experimental APK'
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
